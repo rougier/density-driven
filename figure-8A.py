@@ -22,24 +22,22 @@ References:
     http://www.scholarpedia.org/article/Neural_fields
 '''
 import numpy as np
-import scipy.spatial
 import scipy.linalg
+from scipy.ndimage.filters import convolve
 
 
-def distance(n=40, center=(0,0)):
+def gaussian(n=40, center=(0,0), sigma=0.1):
     xmin, xmax = -1, +1
     ymin, ymax = -1, +1
     x0, y0 = center
     X, Y = np.meshgrid(np.linspace(xmin-x0, xmax-x0, n, endpoint=True),
                        np.linspace(ymin-y0, ymax-y0, n, endpoint=True))
-    return np.sqrt(X*X+Y*Y)
-
-
-def gaussian(D, sigma=1.0):
-    return np.exp(-0.5*(D**2/sigma**2))
+    D = X*X+Y*Y
+    return np.exp(-0.5*D/sigma**2)
 
 
 def convolve1d( Z, K ):
+    # return convolve(Z, K, mode='constant')
     R = np.convolve(Z, K, 'same')
     i0 = 0
     if R.shape[0] > Z.shape[0]:
@@ -74,46 +72,24 @@ if __name__ == '__main__':
 
     #  Parameters
     # ----------------------------------------------------------
-    seed  = 123 # Seed for the random number generator
-
-    n = 50
-    xmin, xmax = -(n-1)/(2*n), +(n-1)/(2*n)
-    ymin, ymax = -(n-1)/(2*n), +(n-1)/(2*n)
-    X, Y = np.meshgrid(np.linspace(xmin, xmax, n, endpoint=True),
-                       np.linspace(ymin, ymax, n, endpoint=True))
-    X, Y = X.ravel(), Y.ravel()
-
-    
-    P = np.load("output/uniform-1024x1024-stipple-1600.npy")
-    # P = np.load("output/circular-gradient-1024x1024-stipple-1600.npy")
-    
-    # P = np.load("./uniform-1024x1024-stipple-2500.npy")
-    pmin, pmax = P.min(), P.max()
-    P = (P - pmin)/(pmax-pmin)
-    X = xmin + (xmax-xmin)*P[:,0]
-    Y = ymin + (ymax-ymin)*P[:,1]
-
-    
-    P = np.stack([X,Y], axis=1)
-    D = scipy.spatial.distance.cdist(P,P)
-    n           = len(P) # Number of neurons
+    seed        = 1      # Seed for the random number generator
+    n           = 40     # Size of the neural field
     dt          = 0.10   # Timestep (seconds)
     duration    = 10.0   # Simulation duration (seconds)
     tau         = 0.75   # Time constant (seconds)
     h           = 0.0    # Resting potential
-    I_weight    = 0.2   # Weight from input to field
-    s        = (40*40)/n # Scaling factor
+    I_weight    = 0.1    # Weight from input to field
+    s = (40*40)/(n*n)    # Scaling factor
 
-    sigma_e     = 0.050   # Sigma for excitatory connections
-    scale_e     = 0.175*s # Intensity for excitatory connections
-    sigma_i     = 0.085   # Sigma for inhibitory connections
-    scale_i     = 0.065*s # Intensity for inhibitory connections
+    sigma_e     = 0.05  # Sigma for excitatory connections
+    scale_e     = 0.15*s # Intensity for excitatory connections
+    sigma_i     = 0.085  # Sigma for inhibitory connections
+    scale_i     = 0.05*s # Intensity for inhibitory connections
 
     noise       = 0.10   # White noise level
-    stim_d      = 100    # Stim discretization level
     stim_n      = 3      # Number of stimulus
     stim_sigma  = 0.1    # Stimulus width
-    stim_rho    = 0.65   # Stimulus distance from center
+    stim_rho    = 0.75   # Stimulus distance from center
     stim_theta  = 0.0    # Current angular position
     stim_dtheta = 0.0005 # Stimulus angular speed
     def f(x):            # Activation function 
@@ -123,33 +99,28 @@ if __name__ == '__main__':
     # Initialization
     # ----------------------------------------------------------
     np.random.seed(1)
-    I = np.zeros((100,100))
-    Xi = ((I.shape[0]-1)*(X - xmin)/(xmax-xmin)).astype(int)
-    Yi = ((I.shape[1]-1)*(Y - ymin)/(ymax-ymin)).astype(int)
-    
-    U, V = np.zeros(n), np.zeros(n)
-    W = scale_e*gaussian(D, sigma=sigma_e) - scale_i*gaussian(D, sigma=sigma_i)
+    I = np.zeros((n,n))
+    U, V = np.zeros((n,n)), np.zeros((n,n))
+    K = (scale_e*gaussian(2*n+1, sigma=sigma_e) -
+         scale_i*gaussian(2*n+1, sigma=sigma_i))
+    USV = scipy.linalg.svd(K)
 
-    I[...] = 0.5
-    I += np.random.uniform(-noise/2, +noise/2, (100,100))
+    I[...] = 0.5 + np.random.uniform(-noise/2, +noise/2, (n,n))
 
 
     # Simulation
     # ----------------------------------------------------------
     def update(frame):
-        global I, U, V
+        global I, U, V, stim_theta, stim_dtheta, noise
 
         for i in range(10):
-            L = np.dot(W,U) 
-            V = V + dt/tau*(-V + L + I_weight*I[Yi,Xi] + h)
+            L = convolve2d(U, K, USV)
+            V = V + dt/tau*(-V + L + I_weight*I + h)
             U = f(V)
 
-        bins = (32,32)
-        H, _, _ = np.histogram2d(Y, X, bins=bins, weights=U, 
-                                 range=[[-1, 1], [-1, +1]])
-        im_U.set_data(H)
-        im_U.set_clim(0,H.max())
-        
+        im_U.set_data(U)
+        im_U.set_clim(0,U.max())
+
 
     # Visualization
     # ----------------------------------------------------------
@@ -157,37 +128,21 @@ if __name__ == '__main__':
     ax = plt.subplot(1,1,1)
 
     for i in range(1000):
-        L = np.dot(W,U) 
-        V = V + dt/tau*(-V + L + I_weight*I[Yi,Xi] + h)
+        L = convolve2d(U, K, USV)
+        V = V + dt/tau*(-V + L + I_weight*I + h)
         U = f(V)
-
-    bins = (40,40)
-    N, _, _ = np.histogram2d(X, Y, bins=bins,
-                             range=[[-1, 1], [-1, +1]])
-    H, _, _ = np.histogram2d(Y, X, bins=bins, weights=U,
-                                 range=[[-1, 1], [-1, +1]])
-    H /= N.max()
     
-    im_U = plt.imshow(H, vmin=0, vmax=H.max(), interpolation="bicubic",
+    im_U = plt.imshow(U, vmin=0, vmax=1, interpolation="bicubic",
                       extent=[-1,+1,-1,+1], origin="lower")
-    
-    ax.scatter(P[:,0], P[:,1], s=5,
-               edgecolor="none", facecolor="white", linewidth=0.5)
     ax.set_xticks([])
     ax.set_yticks([])
-    d= 0.01
-    ax.set_xlim(xmin-d, xmax+d)
-    ax.set_ylim(ymin-d, ymax+d)
-    
-    ax.text(0.025,+0.975, "B", color="white", ha="left", va="top",
+    ax.text(0.025,+0.975, "A", color="white", ha="left", va="top",
             weight="bold", size=24, transform=ax.transAxes)
-
     from mpl_toolkits.axes_grid1 import make_axes_locatable
     divider = make_axes_locatable(plt.gca())
     cax = divider.append_axes("bottom", '5%', pad='7%')
     fig.colorbar(im_U, cax=cax, orientation="horizontal")
-
     plt.tight_layout()
 
-    plt.savefig("figures/figure-6B.pdf")
+    plt.savefig("figures/figure-8A.pdf")
     plt.show()

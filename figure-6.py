@@ -57,5 +57,5 @@ ax = plt.subplot(4,1,4, aspect=1)
 plot(ax, P4)
 
 plt.tight_layout()
-plt.savefig("figures/figure-4.pdf")
+plt.savefig("figures/figure-2.pdf")
 plt.show()

@@ -1,173 +1,187 @@
-# A graphical, scalable and intuitive method for the placement and connections
-# of biological cells - Copyright (2017) Nicolas P. Rougier - BSD license
-import tqdm
 import numpy as np
-from scipy import interpolate
-import scipy.spatial.distance
-import voronoi
-from stippler import normalize, initialization
-from voronoi import voronoi_finite_polygons_2d
-import matplotlib
+
+def rasterize(V):
+    """
+    Polygon rasterization (scanlines).
+
+    Given an ordered set of vertices V describing a polygon,
+    return all the (integer) points inside the polygon.
+    See http://alienryderflex.com/polygon_fill/
+
+    Parameters:
+    -----------
+
+    V : (n,2) shaped numpy array
+        Polygon vertices
+    """
+
+    n = len(V)
+    X, Y = V[:, 0], V[:, 1]
+    ymin = int(np.ceil(Y.min()))
+    ymax = int(np.floor(Y.max()))
+    #ymin = int(np.round(Y.min()))
+    #ymax = int(np.round(Y.max()))
+    P = []
+    for y in range(ymin, ymax+1):
+        segments = []
+        for i in range(n):
+            index1, index2 = (i-1) % n, i
+            y1, y2 = Y[index1], Y[index2]
+            x1, x2 = X[index1], X[index2]
+            if y1 > y2:
+                y1, y2 = y2, y1
+                x1, x2 = x2, x1
+            elif y1 == y2:
+                continue
+            if (y1 <= y < y2) or (y == ymax and y1 < y <= y2):
+                segments.append((y-y1) * (x2-x1) / (y2-y1) + x1)
+
+        segments.sort()
+        for i in range(0, (2*(len(segments)//2)), 2):
+            x1 = int(np.ceil(segments[i]))
+            x2 = int(np.floor(segments[i+1]))
+            # x1 = int(np.round(segments[i]))
+            # x2 = int(np.round(segments[i+1]))
+            P.extend([[x, y] for x in range(x1, x2+1)])
+    if not len(P):
+        return V
+    return np.array(P)
+
+
+def centroid(vertices):
+    A = 0
+    Cx = 0
+    Cy = 0
+    for i in range(len(vertices)-1):
+        s = vertices[i, 0] * vertices[i+1, 1] - vertices[i+1, 0] * vertices[i, 1]
+        A += s
+        Cx += (vertices[i, 0] + vertices[i+1, 0]) * s
+        Cy += (vertices[i, 1] + vertices[i+1, 1]) * s
+    Cx /= 3*A
+    Cy /= 3*A
+    return np.array([[Cx, Cy]])
+
+def weighted_centroid(vertices):
+    V = rasterize(vertices)
+    return V.sum(axis=0)/float(len(V))
+
+
+def plot_shape(ax, seed, radius, letter):
+
+    np.random.seed(seed)
+    n = 12
+
+    T = np.linspace(0, 2*np.pi, n, endpoint=True)
+    R = radius * np.random.uniform(0.75, 1.25, n)
+    R[-1] = R[0]
+    
+    V = np.zeros((n,2))
+    V[:,0] = R*np.cos(T)
+    V[:,1] = R*np.sin(T)
+    V[:,0] -= V[:,0].min()
+    V[:,1] -= V[:,1].min()
+
+    P = rasterize(V)
+    C = centroid(V)
+    wC = weighted_centroid(V[:-1])
+
+    Pi = np.round(P).astype(int)
+    shape = Pi[:,1].max()+1, Pi[:,0].max()+1
+    D = np.zeros(shape)
+    D[Pi[:,1], Pi[:,0]] = 1
+    ax.imshow(.15*D, extent=[0, D.shape[1], 0, D.shape[0]], origin="lower",
+              interpolation="nearest", vmin=0, vmax=1, cmap=plt.cm.gray_r, )
+
+    ax.plot(V[:,0], V[:,1], color="k", linewidth=2)
+    ax.scatter(V[:,0], V[:,1], s=25,  edgecolor="k", facecolor="w", zorder=10)
+    ax.scatter(C[:,0], C[:,1], s=50, marker="o", linewidth=1,
+               edgecolor="k", facecolor="w", alpha=1, zorder=10)
+    ax.scatter(wC[0], wC[1], s=100, marker="x", linewidth=2,
+               edgecolor="None", facecolor="k", zorder=20)
+
+    ax.set_xlim(-0.5,shape[1]+0.5)
+    ax.set_xticks(np.arange(shape[1]+1))
+    ax.set_xticklabels([])
+    ax.xaxis.set_ticks_position('none')
+
+    ax.set_ylim(-0.5,shape[0]+0.5)
+    ax.set_yticks(np.arange(shape[0]+1))
+    ax.set_yticklabels([])
+    ax.yaxis.set_ticks_position('none') 
+
+    ax.text(.05,.95, letter, fontsize="xx-large", weight="bold",
+            ha="center", va="center", transform=ax.transAxes)
+    
+    ax.grid(color="0.6", linestyle='solid')
+
+    
 import matplotlib.pyplot as plt
-from matplotlib.patches import PathPatch, Polygon
-from matplotlib.collections import PatchCollection
-from matplotlib.path import Path
-
-def polygon_area(P):
-    lines = np.hstack([P,np.roll(P,-1,axis=0)])
-    return 0.5*abs(sum(x1*y2-x2*y1 for x1,y1,x2,y2 in lines))
 
 
-def blob(center, radius):
-    n = 10
-    noise = 0.4
-    T = np.linspace(0, 2*np.pi, n, endpoint=False)
-    R = np.random.uniform(1-noise/2, 1+noise/25, n) * radius
-    X, Y = center[0]+R*np.cos(T),  center[1]+R*np.sin(T)
-    X = np.r_[X,X[0]]
-    Y = np.r_[Y,Y[0]]
-    # fit splines to x=f(u) and y=g(u), treating both as periodic. also note that s=0
-    # is needed in order to force the spline fit to pass through all the input points.
-    TCK, U = interpolate.splprep([X, Y], s=0, per=True)
-    # evaluate the spline fits for 1000 evenly spaced distance values
-    Xi, Yi = interpolate.splev(np.linspace(0, 1, 1000), TCK)
-    
-    verts = np.dstack([Xi,Yi]).reshape(len(Xi),2)
-    codes = [Path.MOVETO,] + [Path.LINETO,]*(len(verts)-2) + [Path.LINETO,]
-    path = Path(verts, codes)
-    # return Xi, Yi
-    return X, Y, path
+fig = plt.figure(figsize=(12,6))
+ax = plt.subplot(2,3,1, frameon=False)
+plot_shape(ax, 1, 3, "A")
 
-    
-# Parameters
-# ----------
-np.random.seed(1)
+ax = plt.subplot(2,3,2, frameon=False)
+plot_shape(ax, 1, 5, "B")
 
-n = 1024
-xmin, xmax = 0, n
-ymin, ymax = 0, n
-n_cones = 25
-n_rods = 2500
-n_iter_cones = 15
-n_iter_rods = 30
-cones_radius = 30
-force = 0
+ax = plt.subplot(2,3,3, frameon=False)
+plot_shape(ax, 1, 10, "C")
 
 
-# Compute cones locations
-# -----------------------
-x0, y0 = (xmin+xmax)/2, (ymin+ymax)/2
-X, Y = np.meshgrid(np.linspace(xmin, xmax, n, endpoint=False),
-                   np.linspace(ymin, ymax, n, endpoint=False))
-C = np.sqrt((X-x0)*(X-x0)+(Y-y0)*(Y-y0))
-C = normalize(C)
-density = 1-np.power(C,0.5)
-density_P = density.cumsum(axis=1)
-density_Q = density_P.cumsum(axis=1)
-points = initialization(n_cones, density)
-cones_density = density
-
-if force:
-    print("Generating cones locations (n=%d)" % len(points))
-    for i in tqdm.trange(n_iter_cones):
-        regions, points = voronoi.centroids(points, density, density_P, density_Q)
-    cones = points
-    np.save("output/cones.npy", cones)
-    np.save("output/cones_density.npy", cones_density)
-    cones_radii = cones_radius * np.random.uniform(0.9,1.1,len(cones))
-    np.save("output/cones_radii.npy", cones_radii)
-else:
-    cones = np.load("output/cones.npy")
-    cones_radii = np.load("output/cones_radii.npy")
-    cones_density = np.load("output/cones_density.npy")
-    print("Loading cones locations and radii (n=%d)" % len(cones))
+ax = plt.subplot(2,1,2)
 
 
-# Compute rods locations
-# ----------------------
-if force:
-    density = np.zeros((n,n))
-    density[:] = np.linspace(0.00,0.5,n)
-    
-    for i,(x,y) in enumerate(points):
-        C = np.sqrt((X-x)*(X-x)+(Y-y)*(Y-y))
-        density[C < cones_radii[i]] = 1
-        
-    density = 1-normalize(density)
-    density_P = density.cumsum(axis=1)
-    density_Q = density_P.cumsum(axis=1)
-    rods_density = density
-    points = initialization(n_rods, density)
-    print("Generating rods locations (n=%d)" % len(points))
-    for i in tqdm.trange(n_iter_rods):
-        regions, points = voronoi.centroids(points, density, density_P, density_Q)
-    rods = points
-    np.save("output/rods.npy", rods)
-    np.save("output/rods_density.npy", rods_density)
-else:
-    rods = np.load("output/rods.npy")
-    rods_density = np.load("output/rods_density.npy")
-    print("Loading rods locations (n=%d)" % len(rods))
+def difference(seed, radius):
+    np.random.seed(seed)
+    n = 16
+    T = np.linspace(0, 2*np.pi, n, endpoint=True)
+    R = radius * np.random.uniform(0.5, 1.5, n)
+    R[-1] = R[0]
+    V = np.zeros((n,2))
+    V[:,0] = R*np.cos(T)
+    V[:,1] = R*np.sin(T)
+    V[:,0] -= V[:,0].min()
+    V[:,1] -= V[:,1].min()
+    P = rasterize(V)
+    C = centroid(V)
+    wC = weighted_centroid(V[:-1])
+    return np.sqrt(np.sum((C-wC)**2))
 
 
-# Display
-# -------
-plt.figure(figsize=(9,6))
-
-ax = plt.subplot2grid((2,3), (0, 0), aspect=1)
-
-ax.imshow(1-cones_density, extent=[xmin, xmax, ymin, ymax],
-           cmap=plt.get_cmap("gray"), origin="lower")
-ax.text(24, ymax-24, "A", color="black", weight="bold", va="top", fontsize=16)
-ax.text(12, 12, "Bitmap (1024x1024)", color="black", va="bottom", fontsize=8)
-ax.set_xticks([])
-ax.set_yticks([])
+P = np.zeros((100,50))
+for i,radius in enumerate(np.linspace(2,50,P.shape[0])):
+    for seed in range(P.shape[1]):
+        P[i,seed] = difference(seed, radius)
+X = np.linspace(2,50,P.shape[0])
+D = np.mean(P,axis=1)
+S = np.std(P,axis=1)
+ax.plot(X,D)
+ax.fill_between(X, D+S, D-S, alpha=.15)
 
 
-ax = plt.subplot2grid((2,3), (1, 0), aspect=1)
-ax.imshow(1-rods_density, extent=[xmin, xmax, ymin, ymax],
-           cmap=plt.get_cmap("gray"), origin="lower")
-ax.text(24, ymax-24, "B", color="white", weight="bold", va="top", fontsize=16)
-ax.text(12, 12, "Bitmap (1024x1024)", color="white", va="bottom", fontsize=8)
-
-ax.set_xticks([])
-ax.set_yticks([])
-
-
-ax = plt.subplot2grid((2,3), (0, 1), colspan=2, rowspan=2, aspect=1)
-facecolor = np.zeros((len(cones),4))
-facecolor[:,1] = facecolor[:,2] = np.random.uniform(0.50, 0.65, len(cones))
-facecolor[:,0] = facecolor[:,3] = 1
+ax.scatter( [X[6],X[17],X[37]], [D[6],D[17],D[37]], s=25,
+             facecolor="w", edgecolor="k", zorder=30)
+dy = 0.01
+ax.text(X[6], D[6]-dy, "A", fontsize="large",
+        ha="center", va="top", transform=ax.transData)
+ax.text(X[17], D[17]-dy, "B", fontsize="large", 
+        ha="center", va="top", transform=ax.transData)
+ax.text(X[37], D[37]-dy, "C", fontsize="large", 
+        ha="center", va="top", transform=ax.transData)
 
 
-for P in cones:
-   X, Y, path = blob(P, 1.15*cones_radius)
-   patch = PathPatch(path, edgecolor="black", facecolor="white")
-   ax.add_patch(patch)
+ax.set_xticks([10,20,30,40,50])
+ax.set_xticklabels(["10×10","20×20","30×30","40×40","50×50"])
 
-points = np.append(cones, rods).reshape(len(cones)+len(rods), 2)
-patches = []
-regions, vertices = voronoi_finite_polygons_2d(points)
+ax.set_xlabel("Size (pixels²)")
+ax.set_ylabel("Precision (pixels)")
 
-facecolor = np.zeros((len(regions),4))
-
-for i,region in enumerate(regions):
-    patches.append(Polygon(vertices[region]))
-    a = np.random.uniform(0.75,1.00)
-    facecolor[i] = a,a,a,1
-
-collection = PatchCollection(patches, linewidth=0.25,
-                             facecolor=facecolor, edgecolor="black")
-ax.add_collection(collection)
-
-ax.set_xlim(xmin, xmax)
-ax.set_xticks([])
-ax.set_ylim(ymin, ymax)
-ax.set_yticks([])
-ax.text(24, ymax-24, "C", color="black", weight="bold",
-        va="top", fontsize=24, zorder=100)
 
 plt.tight_layout()
 plt.savefig("figures/figure-5.pdf")
-plt.savefig("figures/figure-5.png")
+
 plt.show()
+
+
+

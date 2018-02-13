@@ -11,11 +11,11 @@ from scipy.spatial.distance import cdist
 svg_filename = "data/galago.svg"
 dat_filename = "data/galago.csv"
 png_filename_P  = "output/galago-patch.png"
-png_filename_PA = "figures/figure-7A.png"
-pdf_filename_PA = "figures/figure-7A.pdf"
+png_filename_PA = "figures/figure-9A.png"
+pdf_filename_PA = "figures/figure-9A.pdf"
 png_filename_I  = "output/galago-inter.png"
-png_filename_IC = "figures/figure-7C.png"
-pdf_filename_IC = "figures/figure-7C.pdf"
+png_filename_IC = "figures/figure-9C.png"
+pdf_filename_IC = "figures/figure-9C.pdf"
 
 dpi = 100
 size = 1000

@@ -190,5 +190,5 @@ if __name__ == '__main__':
 
     plt.tight_layout()
 
-    plt.savefig("figures/figure-6C.pdf")
+    plt.savefig("figures/figure-8C.pdf")
     plt.show()
