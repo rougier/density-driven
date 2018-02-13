@@ -11,7 +11,7 @@ classical assumption of a non- uniform spatial distribution.  e method is
 illustrated on a discrete homogeneous neural eld, on the distribution of cones
 and rods in the retina and on the neural density on a a ened piece of cortex.
 
-![](figures/figure-5.png)
+![](figures/figure-7.png)
 
 
 ### Figure 1
